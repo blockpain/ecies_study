@@ -96,7 +96,7 @@ fn main() {
         sender: verify_key
     };
 
-    println!("signed message struct: {:#?}", &signed_message)
+    println!("signed message struct: {:?}", &signed_message)
 
 }
 
