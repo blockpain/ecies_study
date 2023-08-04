@@ -3,8 +3,21 @@ use k256::ecdh::{EphemeralSecret, SharedSecret};
 use rand_core::OsRng; 
 use hkdf::Hkdf;
 use sha2::Sha256;
-use aes_gcm::{KeyInit,Aes256Gcm};
-use aes_gcm::aead::{Aead, AeadCore, generic_array::GenericArray};
+use aes_gcm::{KeyInit,Aes256Gcm, Nonce, Error};
+use aes_gcm::aead::{Aead, AeadCore, generic_array::{GenericArray, typenum::U12}};
+
+
+#[derive(Debug)]
+pub struct MessageWithSignature {
+    ephemeral_public_key: PublicKey,
+    encrypted_message: Vec<u8>,
+    decrypted_message: Vec<u8>,
+    nonce: Nonce<U12>,
+    signature: Signature,
+    sender: VerifyingKey
+}
+
+
 
 fn main() {
 
@@ -22,21 +35,11 @@ fn main() {
 
     println!("\nSigning key: {:x?}",hex::encode(sk_bytes));
 
-    let signature: Signature = signing_key.sign(msg);
-
-    println!("\nSignature: {:?}", signature);
-
 
     let verify_key = VerifyingKey::from(&signing_key); 
     // Serialize with `::to_encoded_point()`
     let vk=verify_key.to_bytes();
     println!("\nVerifying key (PubKey): {:x?}",hex::encode(vk));
-
-
-    let rtn = verify_key.verify(msg, &signature).is_ok();
-
-    if rtn==true { println!("\nMessage '{:?}' signature correct", message); }
-    else { println!("\nMessage '{:?}' signature incorrect",message);}
 
 
 
@@ -74,14 +77,28 @@ fn main() {
     
 
     let ciphertext = cipher.encrypt(&nonce, message.as_bytes()).unwrap();
+    let signature: Signature = signing_key.sign(&ciphertext);
+    let rtn = verify_key.verify(&ciphertext, &signature).is_ok();
+
+    if rtn==true { println!("\nMessage '{:?}' signature correct", ciphertext); }
+    else { println!("\nMessage '{:?}' signature incorrect",ciphertext);}
     let decrypted = cipher.decrypt(&nonce, ciphertext.as_ref());
 
-    // To authenticate the message, we can use the nonce and ciphertext.
-    println!("\nEncrypted and authenticated message: {:?}", ciphertext);
-    println!("\nNonce: {:?}", nonce);
-    println!("\nDecrypted message: {:?}", decrypted.unwrap());
+   
 
     
+    let signed_message = MessageWithSignature {
+        ephemeral_public_key: secret_a.public_key(),
+        encrypted_message: ciphertext,
+        decrypted_message: decrypted.unwrap(),
+        nonce: nonce,
+        signature: signature,
+        sender: verify_key
+    };
+
+    println!("signed message struct: {:#?}", &signed_message)
 
 }
+
+
 
