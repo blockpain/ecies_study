@@ -1,69 +1,68 @@
-use k256::{ecdsa::{SigningKey, Signature, signature::Signer, VerifyingKey, signature::Verifier}, EncodedPoint, PublicKey};
-use k256::ecdh::{EphemeralSecret, SharedSecret};
-use rand_core::OsRng; 
-use hkdf::Hkdf;
-use sha2::Sha256;
+
+
+use elliptic_curve::ecdh::{diffie_hellman, SharedSecret};
+use elliptic_curve::{SecretKey, PublicKey};
+
+use k256::Secp256k1;
+use k256::ecdsa::{Signature, VerifyingKey, SigningKey, signature::{Signer, Verifier}};
+
+use rand_core::OsRng;
+
 use aes_gcm::{KeyInit,Aes256Gcm, Nonce, Error};
 use aes_gcm::aead::{Aead, AeadCore, generic_array::{GenericArray, typenum::U12}};
 
+use hkdf::Hkdf;
+use sha2::Sha256;
 
-#[derive(Debug)]
-pub struct MessageWithSignature {
-    ephemeral_public_key: PublicKey,
-    encrypted_message: Vec<u8>,
-    decrypted_message: Vec<u8>,
-    nonce: Nonce<U12>,
-    signature: Signature,
-    sender: VerifyingKey
+fn main() {
+    // Generate a random secret key for Alice
+    let (pubkey_a, secret_key_a) = generate_keypair();
+    let (pubkey_b, secret_key_b) = generate_keypair();
+
+    let shared_a = compute_shared_secret(pubkey_b, secret_key_a);
+    let shared_b = compute_shared_secret(pubkey_a, secret_key_b);
+
+    assert!(shared_a.raw_secret_bytes() == shared_b.raw_secret_bytes());
+
+    println!("raw_shared_bytes_a: {:?}\n\n raw_shared_bytes_b:{:?}", shared_a.raw_secret_bytes(), shared_b.raw_secret_bytes());
+
+
+    let (cipher, nonce) = generate_cipher(shared_a);
+
+    let message = "milady";
+
+    println!("message: {:?}\nmessage as bytes:{:?}", message, message.as_bytes());
+
+    let encrypted_message = encrypt_message_with_cipher(&message, &cipher, &nonce);
+
+    println!("\nencrypted message:\n{:?}", encrypted_message);
+
+    let decrypted_message = decrypt_message(&nonce, &cipher, &encrypted_message);
+
+    println!("decrypted message as bytes: {:?}", decrypted_message);
+
+    assert_eq!(message.as_bytes(), decrypted_message);
+    
 }
 
 
+fn generate_keypair() -> (PublicKey<Secp256k1>, SecretKey<Secp256k1>) {
 
-fn main() {
+    let secret = SecretKey::<Secp256k1>::random(&mut OsRng);
 
-    let message = "Hello World";
+    let public = secret.public_key();
 
-    println!("Message: {message}");
+    (public, secret)
 
-    let msg = message.as_bytes();
+}
 
-    println!("\nMessage as bytes: {:?}", msg);
+fn compute_shared_secret(pubkey: PublicKey<Secp256k1>, secret: SecretKey<Secp256k1>) -> SharedSecret<Secp256k1> {
+    let shared_secret = diffie_hellman(secret.to_nonzero_scalar(), pubkey.as_affine());
+    shared_secret
+}
 
-    let signing_key: SigningKey = SigningKey::random(&mut OsRng);
-
-    let sk_bytes = signing_key.to_bytes();
-
-    println!("\nSigning key: {:x?}",hex::encode(sk_bytes));
-
-
-    let verify_key = VerifyingKey::from(&signing_key); 
-    // Serialize with `::to_encoded_point()`
-    let vk=verify_key.to_bytes();
-    println!("\nVerifying key (PubKey): {:x?}",hex::encode(vk));
-
-
-
-
-    let secret_a = EphemeralSecret::random(&mut OsRng);
-    let encoded_a = EncodedPoint::from(secret_a.public_key());
-
-    let secret_b = EphemeralSecret::random(&mut OsRng);
-    let encoded_b = EncodedPoint::from(secret_b.public_key());
-
-    let a_public = PublicKey::from_sec1_bytes(encoded_a.as_ref()).expect("A's public key invalid"); 
-
-
-    let b_public = PublicKey::from_sec1_bytes(encoded_b.as_ref()).expect("B's public key invalid"); 
-
-    let shared_secret_a: SharedSecret = secret_a.diffie_hellman(&b_public);
-    let shared_secret_b: SharedSecret = secret_b.diffie_hellman(&a_public);
-
-    let shared_bytes_a = shared_secret_a.as_bytes();
-    let shared_bytes_b = shared_secret_b.as_bytes();
-
-    println!("\nShared bytes a == shared bytes b: {}", shared_bytes_a == shared_bytes_b);
-
-    let hkdf = Hkdf::<Sha256>::new(None, &shared_bytes_a);
+fn generate_cipher(diffie_secret: SharedSecret<Secp256k1>) -> (Aes256Gcm, Nonce<U12>) {
+    let hkdf = Hkdf::<Sha256>::new(None, &diffie_secret.raw_secret_bytes());
 
     let mut okm = [0u8; 32]; // Output keying material
     hkdf.expand(&[], &mut okm).unwrap();
@@ -74,31 +73,84 @@ fn main() {
 
         // Now we can encrypt and authenticate our message.
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    
 
-    let ciphertext = cipher.encrypt(&nonce, message.as_bytes()).unwrap();
-    let signature: Signature = signing_key.sign(&ciphertext);
-    let rtn = verify_key.verify(&ciphertext, &signature).is_ok();
-
-    if rtn==true { println!("\nMessage '{:?}' signature correct", ciphertext); }
-    else { println!("\nMessage '{:?}' signature incorrect",ciphertext);}
-    let decrypted = cipher.decrypt(&nonce, ciphertext.as_ref());
-
-   
-
-    
-    let signed_message = MessageWithSignature {
-        ephemeral_public_key: secret_a.public_key(),
-        encrypted_message: ciphertext,
-        decrypted_message: decrypted.unwrap(),
-        nonce: nonce,
-        signature: signature,
-        sender: verify_key
-    };
-
-    println!("signed message struct: {:?}", &signed_message)
+    (cipher, nonce)
 
 }
 
+fn encrypt_message_with_cipher(message: &str, cipher: &Aes256Gcm, nonce: &Nonce<U12>) -> Vec<u8> {
+    let ciphertext = cipher.encrypt(&nonce, message.as_bytes()).unwrap();
+    
+    ciphertext
+}
+
+fn decrypt_message(nonce: &Nonce<U12>, cipher: &Aes256Gcm, ciphertext: &Vec<u8>) -> Vec<u8> {
+    let decrypted = cipher.decrypt(&nonce, ciphertext.as_ref());
+
+    decrypted.unwrap()
+}
+
+fn sign_message(secret_key: &SecretKey<Secp256k1>, message: &[u8]) -> Signature {
+    let signing_key = SigningKey::from(secret_key.clone());
+    signing_key.sign(message)
+}
+
+fn verify_signature(pubkey: &PublicKey<Secp256k1>, message: &[u8], signature: &Signature) -> bool {
+    let verifying_key = VerifyingKey::from(pubkey.clone());
+    verifying_key.verify(message, signature).is_ok()
+}
 
 
+// EncryptedMessageInfo struct must contain everything needed to recompute shared secret, and decrypt message on receiving end
+
+pub struct EncryptedMessageInfo{
+    ciphertext: Vec<u8>,
+    receiver_pubkey: PublicKey<Secp256k1>,
+    sender_ephemeral: PublicKey<Secp256k1>,
+    nonce: Nonce<U12>,
+    sender_id_pubkey: PublicKey<Secp256k1>,
+    signature: Signature, 
+}
+
+fn send_message(message: &str, from_pub: PublicKey<Secp256k1>, from_secret: SecretKey<Secp256k1>, to_pub: PublicKey<Secp256k1>) -> EncryptedMessageInfo {
+
+
+    let (eph_pub, eph_sec) = generate_keypair(); 
+    let shared_diffie = compute_shared_secret(to_pub, eph_sec);
+
+    let (cipher, nonce) = generate_cipher(shared_diffie);
+
+    let ciphertext = cipher.encrypt(&nonce, message.as_bytes());
+
+    let signing_key = SigningKey::from(&from_secret.clone());
+
+    let signature = sign_message(&from_secret, &ciphertext.clone().unwrap());
+
+    assert!(verify_signature(&from_pub, &ciphertext.clone().unwrap(), &signature));
+
+    let encrypted_message_info = EncryptedMessageInfo {
+        ciphertext: ciphertext.clone().unwrap(),
+        receiver_pubkey: to_pub,
+        sender_ephemeral: eph_pub,
+        nonce: nonce,
+        sender_id_pubkey: from_pub,
+        signature: signature
+    };
+
+    encrypted_message_info
+
+
+}
+
+fn decrypt_message_info(message_info: EncryptedMessageInfo, secret_key: SecretKey<Secp256k1>) -> Vec<u8> {
+
+    // alright, so first recompute the shared secret using senders epheremeral pubkey and your secret key
+    let shared_diffie = compute_shared_secret(message_info.sender_ephemeral, secret_key);
+
+    let (cipher, _) = generate_cipher(shared_diffie);
+
+    let decrypted = cipher.decrypt(&message_info.nonce, message_info.ciphertext.as_ref());
+
+    decrypted.unwrap()
+
+}
