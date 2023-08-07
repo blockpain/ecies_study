@@ -146,8 +146,6 @@ fn send_message(message: &str, from_pub: PublicKey<Secp256k1>, from_secret: Secr
 
     let ciphertext = cipher.encrypt(&nonce, message.as_bytes());
 
-    let signing_key = SigningKey::from(&from_secret.clone());
-
     let signature = sign_message(&from_secret, &ciphertext.clone().unwrap());
 
     assert!(verify_signature(&from_pub, &ciphertext.clone().unwrap(), &signature));
