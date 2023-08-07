@@ -28,7 +28,7 @@ fn main() {
 
     println!("raw_shared_bytes_a: {:?}\n\n raw_shared_bytes_b:{:?}", shared_a.raw_secret_bytes(), shared_b.raw_secret_bytes());
 
-    // Generate HKDF/SHA256 cipher + nonce
+    // Generate AESGCM/SHA256 cipher + nonce
     // In production, nonce should be based on an incremental message counter 
     // Probablility of repeating nonce is still incredibly low though
     let (cipher, nonce) = generate_cipher(shared_a);
